@@ -1,60 +1,215 @@
+from matplotlib import pyplot as plt 
+from skimage.restoration import denoise_nl_means, estimate_sigma
+from skimage.metrics import peak_signal_noise_ratio as psnr, structural_similarity as ssim
 import torch
-import model
+import os
+from model import *
 
 
-"""
-We will need the following  :
-    1. Two Unets for encoding and decoding
-    2. A denoiser (We'll begin with one of openCV)
-    3. Estimating noise level with the method of the paper mentionned for that
-    
-"""
+WORKING_DIR = "." 
+IMAGES_DIR = os.path.join(WORKING_DIR, "images")
+
+ENCODER_PATH = os.path.join(WORKING_DIR, "encoder.cpkt")
+DECODER_PATH = os.path.join(WORKING_DIR, "decoder.cpkt")
+
 # Hyperparameters according to the paper
 
-NB_EPOCHS = 500
+NB_EPOCHS = 1
+LEARNING_RATE = 0.01
 RHO = 1
 SIGMA = 5
 MU = 0.5
-LITTLE_M = 10
+LITTLE_M = 500
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def update_x(encoder, y, p, q):
-    numerator = (1 / SIGMA ** 2) * encoder(y) + RHO * p - q
-    denominator = RHO + (1 / SIGMA ** 2)
+def update_x(x_hat, y, p, q):
+
+    numerator = x_hat / (SIGMA**2) + RHO * p - q
+    denominator = RHO + (1 / SIGMA**2)
 
     return numerator / denominator
 
+def criterion(x, y, x_hat, y_hat):
+    
+    return ((y_hat - y)**2).sum() / 2 + ((x_hat - x)**2).sum() / (2 * SIGMA**2)
 
-def denoising_algo(y, rho, sigma, mu, gaussianDenoiser):
-    """
-      Still need :
-        1. Define Adam with both encoder and decoder hyperparams
-        2. Use a gaussian denoiser
-        3. Think of how I can train the networks without wasting time
-            on stupid things
 
+def denoise(y, y_real, gaussian_denoiser="nlm"):
     """
+        y : np array of size (512, 512, 3)
+    """
+    list_psnr = []
+    list_ssim = []
+    list_loss = []
+
+
+    y = torch.Tensor(y).permute(2, 0, 1).unsqueeze(0).to(device)
+    
     x = y
+    x = x.to(device)
+    
     p = y
-    q = torch.zeros_like(y)
+    p = p.to(device)
 
-    encoder = U_Net()
-    decoder = U_Net()
+    q = torch.zeros_like(y).to(device)
 
-    optim = torch.optim.Adam()
+    encoder = U_Net().to(device)
+    decoder = U_Net().to(device)
+
+    optimizer = torch.optim.Adam(params=list(encoder.parameters()) + list(decoder.parameters()), lr=LEARNING_RATE)
+    
     for i in range(NB_EPOCHS):
+        mean_psnr = 0
+        mean_ssim = 0
+        mean_loss = 0
+
         for j in range(LITTLE_M):
-            optim.zero_grad()
-            epsilon = torch.randn_like(x)
-            loss = compute_langragian(x, encoder, decoder, p, q)
+
+            optimizer.zero_grad()
+            
+            x_hat = encoder(y)
+            
+            epsilon = torch.randn_like(x_hat).to(device) * 0.03
+            y_hat = decoder(x_hat + epsilon)
+            
+            loss = criterion(x, y, x_hat, y_hat)
+            
             loss.backward()
-            optim.step()
+            optimizer.step()
+            
+            with torch.no_grad():
+                
+                y_hat = encoder(y)
+                x = update_x(x_hat, y, p, q)
+
+                mean_psnr += psnr(y_real, x.squeeze(0).permute(1, 2, 0).cpu().numpy()) / LITTLE_M
+                mean_ssim += ssim(y_real, x.squeeze(0).permute(1, 2, 0).cpu().numpy(), multichannel=True) / LITTLE_M
+                mean_loss += loss / LITTLE_M
+                
+                print(f"EPOCH {j}")
+                
+                print(f"\tLOSS\t{loss}")
+                print(f"\tPSNR\t{psnr(y_real, x.squeeze(0).permute(1, 2, 0).cpu().numpy())}")
+                print(f"\tSSIM\t{ssim(y_real, x.squeeze(0).permute(1, 2, 0).cpu().numpy(), multichannel=True)}")
+
+
+                # display image
+                #plt.imshow(x.squeeze(0).permute(1, 2, 0).cpu().numpy())
+                #plt.show()
+
+                
+                
+
+        # outside nested loop
+        with torch.no_grad():
+            # use white gaussian denoiser to update p
+            if gaussian_denoiser == "nlm":
+                #sigma_est = np.mean(estimate_sigma(x.view(3, 512, 512).permute(1, 2, 0), multichannel=True))
+                p = torch.Tensor(denoise_nl_means(x.view(3, 512, 512).permute(1, 2, 0).cpu().numpy() 
+                                                  + q.view(3, 512, 512).permute(1, 2, 0).cpu().numpy() / RHO,
+                                                  multichannel=True)
+                                ).to(device)
+
+                p = p.permute(2, 0, 1).unsqueeze(0)    
+
+            q = q + MU * RHO * (x - p)
+
+        # saving models weights
+        torch.save(encoder.state_dict(), ENCODER_PATH)
+        torch.save(decoder.state_dict(), DECODER_PATH)
+
+
+        # showing metrics
+        print(f"EPOCH {i}")
+        print(f"\tLOSS\t{mean_loss}")
+        print(f"\tPSNR\t{mean_psnr}")
+        print(f"\tSSIM\t{mean_ssim}")
+
+        # saving metrics
+        list_psnr.append(mean_psnr)
+        list_ssim.append(mean_ssim)
+        list_loss.append(mean_loss)
+
+
+        # display image
+        with torch.no_grad():
+            plt.imshow(x.squeeze(0).permute(1, 2, 0).cpu().numpy())
+            plt.show()
+
+        # progress
+        if i % 5 == 0:
+            print(f"completed {i} epochs")
+
+    return x, list_psnr, list_ssim, list_loss
+
+
+def to_save():
+    """
+        y : np array of size (512, 512, 3)
+    """
+    list_psnr = []
+    list_ssim = []
+    
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    y = torch.Tensor(y).permute(2, 0, 1).unsqueeze(0).to(device)
+    
+    x = y
+    x = x.to(device)
+    
+    p = y
+    p = p.to(device)
+
+    q = torch.zeros_like(y).to(device)
+
+    encoder = U_Net().to(device)
+    decoder = U_Net().to(device)
+
+    optimizer = torch.optim.Adam(params=list(encoder.parameters()) + list(decoder.parameters()), lr=LEARNING_RATE)
+    
+    for i in range(NB_EPOCHS):
+        mean_psnr = 0
+        mean_ssim = 0
+
+        for j in range(LITTLE_M):
+            #print(f"PREPARING UPDATE {j}")
+            optimizer.zero_grad()
+            epsilon = torch.randn_like(x).to(device)
+            loss = criterion(x, y, encoder, decoder)
+            loss.backward()
+            optimizer.step()
+
+            print(f"epoch\t{i}\tloss{loss.cpu().detach().item()}")
 
             with torch.no_grad():
                 x = update_x(encoder, y, p, q)
 
-        # outside nested loop
-        p = gaussianDenoiser(x + q / RHO)
-        q = q + MU * RHO * (x - p)
+                mean_psnr += psnr(y_real, x.squeeze(0).permute(1, 2, 0).cpu().numpy()) / LITTLE_M
+                mean_ssim += ssim(y_real, x.squeeze(0).permute(1, 2, 0).cpu().numpy(), multichannel=True) / LITTLE_M
 
-    return x
+    # outside nested loop
+    if gaussian_denoiser == "nlm":
+        #sigma_est = np.mean(estimate_sigma(x.view(3, 512, 512).permute(1, 2, 0), multichannel=True))
+        p = torch.Tensor(denoise_nl_means(x.view(3, 512, 512).permute(1, 2, 0).cpu().numpy() + q.view(3, 512, 512).permute(1, 2, 0).cpu().numpy() / RHO, multichannel=True)).to(device)
+        #print(p.shape)
+        #print("reshape")
+        p = p.permute(2, 0, 1).unsqueeze(0)
+        #print(p.shape)
+
+    q = q + MU * RHO * (x - p)
+
+    # saving models weights
+    torch.save(encoder.state_dict(), ENCODER_PATH)
+    torch.save(decoder.state_dict(), DECODER_PATH)
+
+    # saving metrics
+    list_psnr.append(mean_psnr)
+    list_ssim.append(mean_ssim)
+
+    # progress
+    if i % 5 == 0:
+        print(f"completed {i} epochs")
+
+    return x, list_psnr, list_ssim

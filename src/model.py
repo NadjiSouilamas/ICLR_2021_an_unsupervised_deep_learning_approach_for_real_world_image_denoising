@@ -2,7 +2,6 @@
     UNet model version 1
 """
 
-from __future__ import print_function, division
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
@@ -85,6 +84,7 @@ class U_Net(nn.Module):
         self.Up_conv2 = conv_block(filters[1], filters[0])
 
         self.Conv = nn.Conv2d(filters[0], out_ch, kernel_size=1, stride=1, padding=0)
+        self.sigmoid = nn.Sigmoid()
 
     # self.active = torch.nn.Sigmoid()
 
@@ -120,8 +120,8 @@ class U_Net(nn.Module):
         d2 = torch.cat((e1, d2), dim=1)
         d2 = self.Up_conv2(d2)
 
-        out = self.Conv(d2)
+        d2 = self.Conv(d2)
 
-        # d1 = self.active(out)
+        out = self.sigmoid(d2)
 
         return out
