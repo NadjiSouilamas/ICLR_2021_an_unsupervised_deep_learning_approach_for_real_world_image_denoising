@@ -6,7 +6,7 @@ import os
 from model import *
 
 
-WORKING_DIR = "." 
+WORKING_DIR = "/content/drive/MyDrive/Projet_AMAL/"
 IMAGES_DIR = os.path.join(WORKING_DIR, "images")
 
 ENCODER_PATH = os.path.join(WORKING_DIR, "encoder.cpkt")
@@ -14,12 +14,12 @@ DECODER_PATH = os.path.join(WORKING_DIR, "decoder.cpkt")
 
 # Hyperparameters according to the paper
 
-NB_EPOCHS = 1
+NB_EPOCHS = 10
 LEARNING_RATE = 0.01
 RHO = 1
 SIGMA = 5
 MU = 0.5
-LITTLE_M = 500
+LITTLE_M = 50
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -94,26 +94,21 @@ def denoise(y, y_real, gaussian_denoiser="nlm"):
                 print(f"\tSSIM\t{ssim(y_real, x.squeeze(0).permute(1, 2, 0).cpu().numpy(), multichannel=True)}")
 
 
-                # display image
-                #plt.imshow(x.squeeze(0).permute(1, 2, 0).cpu().numpy())
-                #plt.show()
-
-                
-                
-
         # outside nested loop
         with torch.no_grad():
-            # use white gaussian denoiser to update p
-            if gaussian_denoiser == "nlm":
-                #sigma_est = np.mean(estimate_sigma(x.view(3, 512, 512).permute(1, 2, 0), multichannel=True))
-                p = torch.Tensor(denoise_nl_means(x.view(3, 512, 512).permute(1, 2, 0).cpu().numpy() 
-                                                  + q.view(3, 512, 512).permute(1, 2, 0).cpu().numpy() / RHO,
-                                                  multichannel=True)
-                                ).to(device)
+          # use white gaussian denoiser to update p
+          if gaussian_denoiser == "nlm":
+            #sigma_est = np.mean(estimate_sigma(x.view(3, 512, 512).permute(1, 2, 0), multichannel=True))
+            p = torch.Tensor(
+                    denoise_nl_means(x.view(3, 512, 512).permute(1, 2, 0).cpu().numpy() 
+                    + q.view(3, 512, 512).permute(1, 2, 0).cpu().numpy() / RHO,
+                    multichannel=True)
+                ).to(device).permute(2, 0, 1).unsqueeze(0)
 
-                p = p.permute(2, 0, 1).unsqueeze(0)    
-
-            q = q + MU * RHO * (x - p)
+          elif gaussian_denoiser == "bm3d":
+            p = torch.Tensor(bm3d.bm3d_rgb(x.view(3, 512, 512).permute(1, 2, 0).cpu().numpy(), sigma_psd= 30/255)).to(device).permute(2, 0, 1).unsqueeze(0)
+            
+          q = q + MU * RHO * (x - p)
 
         # saving models weights
         torch.save(encoder.state_dict(), ENCODER_PATH)
@@ -142,74 +137,3 @@ def denoise(y, y_real, gaussian_denoiser="nlm"):
             print(f"completed {i} epochs")
 
     return x, list_psnr, list_ssim, list_loss
-
-
-def to_save():
-    """
-        y : np array of size (512, 512, 3)
-    """
-    list_psnr = []
-    list_ssim = []
-    
-
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    y = torch.Tensor(y).permute(2, 0, 1).unsqueeze(0).to(device)
-    
-    x = y
-    x = x.to(device)
-    
-    p = y
-    p = p.to(device)
-
-    q = torch.zeros_like(y).to(device)
-
-    encoder = U_Net().to(device)
-    decoder = U_Net().to(device)
-
-    optimizer = torch.optim.Adam(params=list(encoder.parameters()) + list(decoder.parameters()), lr=LEARNING_RATE)
-    
-    for i in range(NB_EPOCHS):
-        mean_psnr = 0
-        mean_ssim = 0
-
-        for j in range(LITTLE_M):
-            #print(f"PREPARING UPDATE {j}")
-            optimizer.zero_grad()
-            epsilon = torch.randn_like(x).to(device)
-            loss = criterion(x, y, encoder, decoder)
-            loss.backward()
-            optimizer.step()
-
-            print(f"epoch\t{i}\tloss{loss.cpu().detach().item()}")
-
-            with torch.no_grad():
-                x = update_x(encoder, y, p, q)
-
-                mean_psnr += psnr(y_real, x.squeeze(0).permute(1, 2, 0).cpu().numpy()) / LITTLE_M
-                mean_ssim += ssim(y_real, x.squeeze(0).permute(1, 2, 0).cpu().numpy(), multichannel=True) / LITTLE_M
-
-    # outside nested loop
-    if gaussian_denoiser == "nlm":
-        #sigma_est = np.mean(estimate_sigma(x.view(3, 512, 512).permute(1, 2, 0), multichannel=True))
-        p = torch.Tensor(denoise_nl_means(x.view(3, 512, 512).permute(1, 2, 0).cpu().numpy() + q.view(3, 512, 512).permute(1, 2, 0).cpu().numpy() / RHO, multichannel=True)).to(device)
-        #print(p.shape)
-        #print("reshape")
-        p = p.permute(2, 0, 1).unsqueeze(0)
-        #print(p.shape)
-
-    q = q + MU * RHO * (x - p)
-
-    # saving models weights
-    torch.save(encoder.state_dict(), ENCODER_PATH)
-    torch.save(decoder.state_dict(), DECODER_PATH)
-
-    # saving metrics
-    list_psnr.append(mean_psnr)
-    list_ssim.append(mean_ssim)
-
-    # progress
-    if i % 5 == 0:
-        print(f"completed {i} epochs")
-
-    return x, list_psnr, list_ssim
