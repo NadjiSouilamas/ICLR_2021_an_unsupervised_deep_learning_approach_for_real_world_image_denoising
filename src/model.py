@@ -1,8 +1,3 @@
-# model.py
-"""
-    UNet model version 1
-"""
-
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
@@ -11,7 +6,7 @@ import torch
 
 class ConvBlock(nn.Module):
     """
-    Convolution Block
+    Standard 2-layer convolution block 
     """
 
     def __init__(self, input_channel_size, output_channel_size):
@@ -33,7 +28,7 @@ class ConvBlock(nn.Module):
 
 class UpConv(nn.Module):
     """
-    Up Convolution Block
+    Upsampling block with convolutions
     """
 
     def __init__(self, input_channel_size, output_channel_size):
@@ -52,46 +47,41 @@ class UpConv(nn.Module):
 
 
 class UNet(nn.Module):
-    """
-    UNet - Basic Implementation
-    Paper : https://arxiv.org/abs/1505.04597
-    """
 
     def __init__(self, input_channel_size=3, output_channel_size=3):
         super(UNet, self).__init__()
 
-        n1 = 64
-        filters = [n1, n1 * 2, n1 * 4, n1 * 8, n1 * 16]
+        nb_filters = 64
 
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.conv1 = ConvBlock(input_channel_size, filters[0])
-        self.conv2 = ConvBlock(filters[0], filters[1])
-        self.conv3 = ConvBlock(filters[1], filters[2])
-        self.conv4 = ConvBlock(filters[2], filters[3])
-        self.conv5 = ConvBlock(filters[3], filters[4])
+        self.conv1 = ConvBlock(input_channel_size, nb_filters)
+        self.conv2 = ConvBlock(nb_filters, 2 * nb_filters)
+        self.conv3 = ConvBlock(2 * nb_filters, 4 * nb_filters)
+        self.conv4 = ConvBlock(4 * nb_filters, 8 * nb_filters)
+        self.conv5 = ConvBlock(8 * nb_filters, 16 * nb_filters)
 
-        self.up5 = UpConv(filters[4], filters[3])
-        self.upConv5 = ConvBlock(filters[4], filters[3])
+        self.up5 = UpConv(16 * nb_filters, 8 * nb_filters)
+        self.up_conv5 = ConvBlock(16 * nb_filters, 8 * nb_filters)
 
-        self.up4 = UpConv(filters[3], filters[2])
-        self.upConv4 = ConvBlock(filters[3], filters[2])
+        self.up4 = UpConv(8 * nb_filters, 4 * nb_filters)
+        self.up_conv4 = ConvBlock(8 * nb_filters, 4 * nb_filters)
 
-        self.up3 = UpConv(filters[2], filters[1])
-        self.upConv3 = ConvBlock(filters[2], filters[1])
+        self.up3 = UpConv(4 * nb_filters, 2 * nb_filters)
+        self.up_conv3 = ConvBlock(4 * nb_filters, 2 * nb_filters)
 
-        self.up2 = UpConv(filters[1], filters[0])
-        self.upConv2 = ConvBlock(filters[1], filters[0])
+        self.up2 = UpConv(2 * nb_filters, nb_filters)
+        self.up_conv2 = ConvBlock(2 * nb_filters, nb_filters)
 
-        self.conv = nn.Conv2d(filters[0], output_channel_size, kernel_size=1, stride=1, padding=0)
+        self.conv = nn.Conv2d(nb_filters, output_channel_size, kernel_size=1, stride=1, padding=0)
         self.sigmoid = nn.Sigmoid()
 
 
     def forward(self, x):
-        e1 = self.Conv1(x)
+        e1 = self.conv1(x)
 
         e2 = self.pool1(e1)
         e2 = self.conv2(e2)

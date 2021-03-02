@@ -22,7 +22,7 @@ SIGMA = 5
 MU = 0.5
 
 # you may need to adjust these parameters for some images, especially with BM3D
-BIG_M = NB_EPOCHS // 100
+BIG_M = NB_EPOCHS // 50
 LITTLE_M = NB_EPOCHS // BIG_M
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -64,8 +64,8 @@ def denoise(y, y_real, gaussian_denoiser="nlm", verbose=False, interval=5):
 
     q = torch.zeros_like(y).to(device)
 
-    encoder = U_Net().to(device)
-    decoder = U_Net().to(device)
+    encoder = UNet().to(device)
+    decoder = UNet().to(device)
 
     optimizer = torch.optim.Adam(params=list(encoder.parameters()) + list(decoder.parameters()), lr=LEARNING_RATE)
     
@@ -96,7 +96,7 @@ def denoise(y, y_real, gaussian_denoiser="nlm", verbose=False, interval=5):
                 x_hat = encoder(y)
                 x = update_x(x_hat, y, p, q)
 
-                if i * LITTLE_M + j % interval == 0:
+                if (i * LITTLE_M + j) % interval == 0:
                   actual_psnr = psnr(y_real, x.squeeze(0).permute(1, 2, 0).cpu().numpy())
                   actual_ssim = ssim(y_real, x.squeeze(0).permute(1, 2, 0).cpu().numpy(), multichannel=True) 
 
@@ -162,7 +162,7 @@ def denoise(y, y_real, gaussian_denoiser="nlm", verbose=False, interval=5):
 
         # progress
         if verbose:
-            print(f"completed {i} global passes")
+            print(f"completed {i + 1} global passes")
 
     # saving best image in file
     if gaussian_denoiser == "nlm":
